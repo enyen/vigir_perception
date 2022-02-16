@@ -16,13 +16,28 @@ find_package(catkin REQUIRED COMPONENTS
   depth_image_proc
   tf
   tf_conversions
+  octomap
+  message_generation
 )
 
 find_package(PCL REQUIRED)
+find_package(octomap REQUIRED)
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
+  ${OCTOMAP_INCLUDE_DIRS}
+)
+link_libraries(${OCTOMAP_LIBRARIES})
+
+add_service_files(
+  FILES
+  StringInput.srv
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
 )
 
 catkin_package(
@@ -45,6 +60,10 @@ add_dependencies(cloud_to_mesh_node ${catkin_EXPORTED_TARGETS})
 add_executable(depth_image_to_mesh_node src/depth_image_to_mesh_node.cpp ${HEADER_FILES})
 target_link_libraries(depth_image_to_mesh_node ${catkin_LIBRARIES})
 add_dependencies(depth_image_to_mesh_node ${catkin_EXPORTED_TARGETS})
+
+add_executable(octomap_to_mesh_node src/octomap_to_mesh_node.cpp ${HEADER_FILES})
+target_link_libraries(octomap_to_mesh_node ${catkin_LIBRARIES})
+add_dependencies(octomap_to_mesh_node ${catkin_EXPORTED_TARGETS})
 
 install(TARGETS cloud_to_mesh_node depth_image_to_mesh_node
    LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}

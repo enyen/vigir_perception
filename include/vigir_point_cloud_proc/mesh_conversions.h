@@ -161,5 +161,43 @@ static void meshToPly(const pcl::PolygonMesh& in, std::string filename)
   return;
 }
 
+
+static void meshToPly_nocolor(const pcl::PolygonMesh& in, std::string filename)
+{
+  pcl_msgs::PolygonMesh pcl_msg_mesh;
+  pcl_conversions::fromPCL(in, pcl_msg_mesh);
+
+  size_t vsize = sensor_msgs::PointCloud2Modifier(pcl_msg_mesh.cloud).size();
+  std::ofstream stream(filename.c_str());
+  if (!stream)
+    return;
+  stream << "ply" << std::endl;
+  stream << "format ascii 1.0" << std::endl;
+  stream << "element vertex " << vsize << std::endl;
+  stream << "property float x" << std::endl;
+  stream << "property float y" << std::endl;
+  stream << "property float z" << std::endl;
+//  stream << "property uchar red" << std::endl;
+//  stream << "property uchar green" << std::endl;
+//  stream << "property uchar blue" << std::endl;
+//  stream << "property uchar alpha" << std::endl;
+  stream << "element face " << in.polygons.size() << std::endl;
+  stream << "property list uchar int vertex_indices" << std::endl;  // pcl-1.7(ros::kinetic) breaks ply convention by not using "vertex_index"
+  stream << "end_header" << std::endl;
+
+  sensor_msgs::PointCloud2ConstIterator<float> pt_iter(pcl_msg_mesh.cloud, "x");
+//  sensor_msgs::PointCloud2ConstIterator<uint8_t> r_iter(pcl_msg_mesh.cloud, "r");
+//  sensor_msgs::PointCloud2ConstIterator<uint8_t> g_iter(pcl_msg_mesh.cloud, "g");
+//  sensor_msgs::PointCloud2ConstIterator<uint8_t> b_iter(pcl_msg_mesh.cloud, "b");
+  for(size_t i = 0; i < vsize ; i++, ++pt_iter){
+    stream << pt_iter[0] << " " << pt_iter[1] << " " << pt_iter[2] << std::endl;
+  }
+  for (size_t i = 0; i < in.polygons.size(); i++) {
+    stream << "3 " << in.polygons[i].vertices[0] << " " << in.polygons[i].vertices[1] << " " << in.polygons[i].vertices[2];
+    stream << std::endl;
+  }
+  return;
+}
+
 }
 #endif
