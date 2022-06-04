@@ -16,7 +16,6 @@ find_package(catkin REQUIRED COMPONENTS
   depth_image_proc
   tf
   tf_conversions
-  octomap
   message_generation
 )
 
