@@ -30,26 +30,10 @@
 #define VIGIR_CLOUD_TO_MESH_H_
 
 
-
-//#include <sensor_msgs/PointCloud2.h>
-
-#include <pcl/point_cloud.h>
-
-#include <pcl/surface/marching_cubes.h>
-#include <pcl/surface/marching_cubes_rbf.h>
-#include <pcl/surface/marching_cubes_hoppe.h>
-#include <pcl/surface/poisson.h>
-#include <pcl/surface/gp3.h>
-#include <pcl/surface/mls.h>
-#include <pcl/common/time.h>
-
-#include <pcl/filters/voxel_grid.h>
-
-
-
+#include <pcl/point_types.h>
+#include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/features/normal_3d.h>
-
-#include <pcl/io/ply_io.h>
+#include <pcl/surface/gp3.h>
 
 namespace vigir_point_cloud_proc
 {
@@ -67,12 +51,10 @@ public:
 
   CloudToMesh()
   {
-    surface_reconstruction_.reset(new pcl::MarchingCubesRBF<PointTNormal>());
-
     voxel_size_ = 0.05;
   }
 
-  bool setInput( const boost::shared_ptr<pcl::PointCloud<PointT> > pc_in){
+  bool setInput( const boost::shared_ptr<pcl::PointCloud<pcl::PointXYZ> > pc_in){
     pc_ = pc_in;
   }
 
@@ -82,157 +64,47 @@ public:
 
   bool computeMesh()
   {
-
-    stop_watch_.reset();
-
-    if (!pc_.get())
-      return false;
-
-    if (!(pc_->size() > 200))
-      return false;
-
-    boost::shared_ptr<pcl::PointCloud<PointTNormal> > point_cloud_normal_voxelized (new pcl::PointCloud<PointTNormal> ());
-
-    /*
-    pcl::NormalEstimation<PointT, PointTNormal> norm_est;
+    // Normal estimation*
+    pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> n;
     pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
-    boost::shared_ptr<pcl::search::KdTree<PointT> > tree (new pcl::search::KdTree<PointT>);
+    pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);
     tree->setInputCloud (pc_);
-    norm_est.setInputCloud (pc_);
-    norm_est.setSearchMethod (tree);
-    norm_est.setKSearch (100);
-    norm_est.compute (*point_cloud_normal_voxelized);
-    */
+    n.setInputCloud (pc_);
+    n.setSearchMethod (tree);
+    n.setKSearch (10);
+    n.compute (*normals);
 
-    boost::shared_ptr<pcl::PointCloud<PointT> > pc_voxelized (new pcl::PointCloud<PointT> ());
-    pcl::VoxelGrid<PointT> pre_filter;
-    pre_filter.setInputCloud(pc_);
-    pre_filter.setLeafSize(voxel_size_, voxel_size_, voxel_size_);
-    pre_filter.filter(*pc_voxelized);
+    // Concatenate the XYZ and normal fields*
+    pcl::PointCloud<pcl::PointNormal>::Ptr cloud_with_normals (new pcl::PointCloud<pcl::PointNormal>);
+    pcl::concatenateFields (*pc_, *normals, *cloud_with_normals);
+    // Create search tree*
+    pcl::search::KdTree<pcl::PointNormal>::Ptr tree2 (new pcl::search::KdTree<pcl::PointNormal>);
+    tree2->setInputCloud (cloud_with_normals);
 
-    double time_prefilter = stop_watch_.getTimeSeconds();
-    //std::cout << "Prefilter finished in " << time_prefilter << " s.\n";
-
-
-    pcl::MovingLeastSquares<PointT, PointTNormal> mls;
-
-    //mls.setUpsamplingMethod(pcl::MovingLeastSquares<PointT, PointTNormal>::VOXEL_GRID_DILATION);
-    //mls.setDilationVoxelSize(0.025);
-    //mls.setDilationIterations(1);
-
-    mls.setSearchRadius(0.05);
-    mls.setPolynomialOrder(1);
-    mls.setComputeNormals(true);
-    mls.setInputCloud(pc_voxelized);
-
-    boost::shared_ptr<pcl::PointCloud<PointTNormal> > point_cloud_mls_normal;
-    point_cloud_mls_normal.reset(new pcl::PointCloud<PointTNormal>);
-    //std::cout << "start mls\n";
-    mls.process(*point_cloud_mls_normal);
-
-    double time_mls = stop_watch_.getTimeSeconds();
-    //std::cout << "MLS finished in " << time_mls - time_prefilter << " s.\n";
-
-
-    //std::cout << "start voxel\n";
-    pcl::VoxelGrid<PointTNormal> filter;
-    filter.setInputCloud(point_cloud_mls_normal);
-    filter.setLeafSize(voxel_size_, voxel_size_, voxel_size_);
-    filter.filter(*point_cloud_normal_voxelized);
-
-    double time_postfilter = stop_watch_.getTimeSeconds();
-    //std::cout << "Postfilter finished in " << time_postfilter - time_mls << " s.\n";
-
-
-
-    //pcl::copyPointCloud (*pc_, *point_cloud_normal_voxelized);
-    //pointcloud.reset();
-
-    // Create the search method
-    //std::cout << "start kdtree\n";
-    boost::shared_ptr<pcl::search::KdTree<PointTNormal> > tree2 (new pcl::search::KdTree<PointTNormal>);
-    tree2->setInputCloud (point_cloud_normal_voxelized);
-
-    double time_kdtree = stop_watch_.getTimeSeconds();
-    //std::cout << "KdTree finished in " << time_kdtree - time_postfilter << " s.\n";
     // Initialize objects
+    pcl::GreedyProjectionTriangulation<pcl::PointNormal> gp3;
+    gp3.setSearchRadius (voxel_size_ * 2);
+    gp3.setMu (2);
+    gp3.setMaximumNearestNeighbors (64);
+    gp3.setMaximumSurfaceAngle(M_PI/4); // 45 degrees
+    gp3.setMinimumAngle(M_PI/18); // 10 degrees
+    gp3.setMaximumAngle(2*M_PI/3); // 120 degrees
+    gp3.setNormalConsistency(false);
 
-
-    /*
-    //pcl::MarchingCubesGreedy<PointTNormal> mc;
-    //pcl::MarchingCubesRBF<PointTNormal> mc;
-    pcl::MarchingCubesHoppe<PointTNormal> mc;
-    double leafSize = 0.01;
-    float isoLevel = 0.5;
-    // Set parameters
-    //mc.setLeafSize(leafSize);
-    //mc.setGridResolution(512,512,512);
-    mc.setIsoLevel(isoLevel);   //ISO: must be between 0 and 1.0
-    mc.setSearchMethod(tree2);
-    mc.setInputCloud(point_cloud_normal_voxelized);
-    // Reconstruct
-    mc.reconstruct (mesh);
-    */
-
-    /*
-    pcl::Poisson<pcl::PointNormal> poisson;
-    poisson.setDepth(9);
-    poisson.setInputCloud(point_cloud_normal_voxelized);
-    poisson.setConfidence();
-    poisson.reconstruct(mesh);
-    */
-
-    pcl::GreedyProjectionTriangulation<pcl::PointNormal> greedy;
-    greedy.setSearchRadius(0.1);
-    greedy.setMu (2.5);
-    greedy.setMaximumNearestNeighbors(50);
-    greedy.setMinimumAngle(M_PI/18); // 10 degrees
-    greedy.setMaximumAngle(2*M_PI/3); // 120 degrees
-    greedy.setNormalConsistency(true);
-    greedy.setConsistentVertexOrdering(true);
-
-    greedy.setSearchMethod(tree2);
-    greedy.setInputCloud(point_cloud_normal_voxelized);
-
-    //std::cout << "start reconstruct\n";
-    greedy.reconstruct(mesh_);
-
-    double time_greedy = stop_watch_.getTimeSeconds();
-    //std::cout << "Greedy finished in " << time_greedy - time_kdtree << " s.\n";
-
-    //Saving to disk in VTK format:
-    //pcl::io::saveVTKFile ("mesh.vtk", mesh);
-
-    //surface_reconstruction_->setSearchMethod(tree2);
-    //surface_reconstruction_->setInputCloud(point_cloud_normal_voxelized);
-
-    //std::cout << "Total Reconstruction finished in " << stop_watch_.getTimeSeconds() << " s.";
+    // Get result
+    gp3.setInputCloud (cloud_with_normals);
+    gp3.setSearchMethod (tree2);
+    gp3.reconstruct (mesh_);
 
     return true;
-
-    //pcl::io::savePLYFile("/home/kohlbrecher/poly.ply", mesh_);
-
-
   }
 
   const pcl::PolygonMesh& getMesh() const { return mesh_; };
 
 private:
-  //sensor_msgs::LaserScan scan_;
-  //laser_geometry::LaserProjection laser_proj_;
-  //tf::Transformer tf_transformer_;
-  boost::shared_ptr<pcl::PointCloud<PointT> > pc_;
-
-  boost::shared_ptr<pcl::SurfaceReconstruction<pcl::PointNormal> > surface_reconstruction_;
-
+  boost::shared_ptr<pcl::PointCloud<pcl::PointXYZ> > pc_;
   pcl::PolygonMesh mesh_;
-
-  pcl::StopWatch stop_watch_;
-
   double voxel_size_;
-
-
-
 };
 
 }
